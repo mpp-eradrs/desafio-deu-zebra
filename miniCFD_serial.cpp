@@ -157,14 +157,14 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   #pragma omp parallel
   {
     #pragma omp for nowait
-    for (int ll=0; ll<NUM_VARS; ll++) {
-      for (int k=0; k<nnz; k++) {
-        for (int i=0; i<nnx; i++) {
-          int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-          int indt = ll*nnz*nnx + k*nnx + i;
-          state_out[inds] = state_init[inds] + dt * tend[indt];
-        }
-      }
+    for(int a = 0; a < NUM_VARS * nnz * nnx; a++){
+      int ll = a / (nnz * nnx);
+      int k = (a / nnx) % nnz;
+      int i = a % nnx;
+
+      int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+      int indt = ll*nnz*nnx + k*nnx + i;
+      state_out[inds] = state_init[inds] + dt * tend[indt];
     }
   }
 }
