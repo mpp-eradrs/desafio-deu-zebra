@@ -137,8 +137,8 @@ void do_timestep( double *state , double *state_tmp , double *flux , double *ten
 //state_out = state_init + dt * rhs(state_forcing)
 //Meaning the step starts from state_init, computes the rhs using state_forcing, and stores the result in state_out
 void do_semi_step( double *state_init , double *state_forcing , double *state_out , double dt , int dir , double *flux , double *tend ) {
-  int i, k, ll, inds, indt;
-  if        (dir == DIR_X) {
+  
+  if(dir == DIR_X) {
     //Set the halo values for this MPI task's fluid state in the x-direction
     exchange_border_x(state_forcing);
     //Compute the time tendencies for the fluid state in the x-direction
@@ -154,11 +154,12 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nnz; k++) {
-      for (i=0; i<nnx; i++) {
-        inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-        indt = ll*nnz*nnx + k*nnx + i;
+  #pragma omp parallel for
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int k=0; k<nnz; k++) {
+      for (int i=0; i<nnx; i++) {
+        int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+        int indt = ll*nnz*nnx + k*nnx + i;
         state_out[inds] = state_init[inds] + dt * tend[indt];
       }
     }
@@ -171,22 +172,29 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 //First, compute the flux vector at each cell interface in the x-direction (including viscosity)
 //Then, compute the tendencies using those fluxes
 void do_dir_x( double *state , double *flux , double *tend ) {
-  int    i,k,ll,s,inds,indf1,indf2,indt;
-  double r,u,w,t,p, stencil[4], d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
+  
   //Compute the hyperviscosity coeficient
-  v_coef = -hv * dx / (16*dt);
+  const double v_coef = -hv * dx / (16*dt);;
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nnz; k++) {
-    for (i=0; i<nnx+1; i++) {
+  #pragma omp parallel for
+  for (int k=0; k<nnz; k++) {
+    for (int i=0; i<nnx+1; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s < cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
+      
+      double vals[NUM_VARS], d_vals[NUM_VARS];
+      
+      for (int ll=0; ll<NUM_VARS; ll++) {
+        
+        double stencil[4];
+        
+        for (int s=0; s < cfd_size; s++) {
+          int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
           stencil[s] = state[inds];
         }
+
         //Fourth-order-accurate interpolation of the state
         vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
         //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
@@ -194,11 +202,11 @@ void do_dir_x( double *state , double *flux , double *tend ) {
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[POS_DENS] + cfd_dens_cell[k+hs];
-      u = vals[POS_UMOM] / r;
-      w = vals[POS_WMOM] / r;
-      t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
-      p = pow((r*t),gamm)*C0;
+      double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
+      double u = vals[POS_UMOM] / r;
+      double w = vals[POS_WMOM] / r;
+      double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
+      double p = pow((r*t),gamm)*C0;
 
       //Compute the flux vector
       flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
@@ -212,12 +220,13 @@ void do_dir_x( double *state , double *flux , double *tend ) {
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nnz; k++) {
-      for (i=0; i<nnx; i++) {
-        indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-        indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-        indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
+  #pragma omp parallel for
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int k=0; k<nnz; k++) {
+      for (int i=0; i<nnx; i++) {
+        int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+        int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
+        int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
         tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
       }
     }
@@ -230,20 +239,24 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 //First, compute the flux vector at each cell interface in the z-direction (including viscosity)
 //Then, compute the tendencies using those fluxes
 void do_dir_z( double *state , double *flux , double *tend ) {
-  int    i,k,ll,s, inds, indf1, indf2, indt;
-  double r,u,w,t,p, stencil[4], d_vals[NUM_VARS], vals[NUM_VARS], v_coef;
+  
   //Compute the viscosity coeficient
-  v_coef = -hv * dz / (16*dt);
+  const double v_coef = -hv * dz / (16 * dt);
+  
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-  for (k=0; k<nnz+1; k++) {
-    for (i=0; i<nnx; i++) {
+  #pragma omp parallel for
+  for (int k=0; k<nnz+1; k++) {
+    for (int i=0; i<nnx; i++) {
       //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-      for (ll=0; ll<NUM_VARS; ll++) {
-        for (s=0; s<cfd_size; s++) {
-          inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
+      
+      double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
+      
+      for (int ll=0; ll<NUM_VARS; ll++) {
+        for (int s=0; s<cfd_size; s++) {
+          int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
           stencil[s] = state[inds];
         }
         //Fourth-order-accurate interpolation of the state
@@ -253,11 +266,11 @@ void do_dir_z( double *state , double *flux , double *tend ) {
       }
 
       //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-      r = vals[POS_DENS] + cfd_dens_int[k];
-      u = vals[POS_UMOM] / r;
-      w = vals[POS_WMOM] / r;
-      t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
-      p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
+      double r = vals[POS_DENS] + cfd_dens_int[k];
+      double u = vals[POS_UMOM] / r;
+      double w = vals[POS_WMOM] / r;
+      double t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
+      double p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
       //Enforce vertical boundary condition and exact mass conservation
       if (k == 0 || k == nnz) {
         w                = 0;
@@ -276,15 +289,16 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (k=0; k<nnz; k++) {
-      for (i=0; i<nnx; i++) {
-        indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-        indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
-        indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
+  #pragma omp parallel for
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int k=0; k<nnz; k++) {
+      for (int i=0; i<nnx; i++) {
+        int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+        int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
+        int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
         tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
         if (ll == POS_WMOM) {
-          inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
+          int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
           tend[indt] = tend[indt] - state[inds]*grav;
         }
       }
@@ -341,14 +355,12 @@ void exchange_border_x( double *state ) {
 //Set this MPI task's halo values in the z-direction. This does not require MPI because there is no MPI
 //decomposition in the vertical direction
 void exchange_border_z( double *state ) {
-  int          i, ll;
   const double mnt_width = xlen/8;
-  double       x, xloc, mnt_deriv;
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
-  for (ll=0; ll<NUM_VARS; ll++) {
-    for (i=0; i<nnx+2*hs; i++) {
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int i=0; i<nnx+2*hs; i++) {
       if (ll == POS_WMOM) {
         state[ll*(nnz+2*hs)*(nnx+2*hs) + (0      )*(nnx+2*hs) + i] = 0.;
         state[ll*(nnz+2*hs)*(nnx+2*hs) + (1      )*(nnx+2*hs) + i] = 0.;
@@ -356,11 +368,11 @@ void exchange_border_z( double *state ) {
         state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
         //Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
         if (config_spec == CONFIG_IN_TEST3) {
-          x = (i_beg+i-hs+0.5)*dx;
+          double x = (i_beg+i-hs+0.5)*dx;
           if ( fabs(x-xlen/4) < mnt_width ) {
-            xloc = (x-(xlen/4)) / mnt_width;
+            double xloc = (x-(xlen/4)) / mnt_width;
             //Compute the derivative of the fake mountain
-            mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
+            double mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
             //w = (dz/dx)*u
             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (0)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (1)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
