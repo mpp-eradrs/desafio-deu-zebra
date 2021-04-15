@@ -1,1 +1,0 @@
-module load cuda11.2/toolkit
