@@ -543,7 +543,25 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   cudaDeviceSynchronize();
 }
 
+// CUDA kernel. 
+__global__ void copyStatesX(double *d, int n, int nnx_, int nnz_)
+{
+    // Get our global thread ID
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+ 
+    // Make sure we do not go out of bounds
+    if (id < n){
+        int ll = id / nnz_;
+        int k = id % nnz_;
 
+        int pos = ll*(nnz_+4)*(nnx_+4) + (k+hs)*(nnx_+4);
+
+        d[pos      ] = d[pos + nnx_];
+        d[pos + 1      ] = d[pos + nnx_+1];
+        d[pos + nnx_+2  ] = d[pos + 2     ];
+        d[pos + nnx_+3] = d[pos + 3   ];
+    }    
+}
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void exchange_border_x( double *state ) {
