@@ -325,10 +325,11 @@ void exchange_border_x( double *state ) {
   for (ll=0; ll<NUM_VARS; ll++) {
     #pragma omp parallel for
     for (k=0; k<nnz; k++) {
-      state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + 0      ] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs-2];
-      state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + 1      ] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs-1];
-      state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs  ] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + hs     ];
-      state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs+1] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + hs+1   ];
+      int pos = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs);
+      state[pos + 0      ] = state[pos + nnx+hs-2];
+      state[pos + 1      ] = state[pos + nnx+hs-1];
+      state[pos + nnx+hs  ] = state[pos + hs     ];
+      state[pos + nnx+hs+1] = state[pos + hs+1   ];
     }
   }
   ////////////////////////////////////////////////////
@@ -363,11 +364,14 @@ void exchange_border_z( double *state ) {
   #pragma omp parallel for
   for (int ll=0; ll<NUM_VARS; ll++) {
     for (int i=0; i<nnx+2*hs; i++) {
+      
+      int pos = ll*(nnz+2*hs)*(nnx+2*hs);
+      
       if (ll == POS_WMOM) {
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (0      )*(nnx+2*hs) + i] = 0.;
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (1      )*(nnx+2*hs) + i] = 0.;
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
+        state[pos + (0      )*(nnx+2*hs) + i] = 0.;
+        state[pos + (1      )*(nnx+2*hs) + i] = 0.;
+        state[pos + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
+        state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
         //Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
         if (config_spec == CONFIG_IN_TEST3) {
           double x = (i_beg+i-hs+0.5)*dx;
@@ -381,10 +385,10 @@ void exchange_border_z( double *state ) {
           }
         }
       } else {
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (0      )*(nnx+2*hs) + i] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (hs     )*(nnx+2*hs) + i];
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (1      )*(nnx+2*hs) + i] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (hs     )*(nnx+2*hs) + i];
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs  )*(nnx+2*hs) + i] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs-1)*(nnx+2*hs) + i];
-        state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs+1)*(nnx+2*hs) + i] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (nnz+hs-1)*(nnx+2*hs) + i];
+        state[pos + (0      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
+        state[pos + (1      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
+        state[pos + (nnz+hs  )*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
+        state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
       }
     }
   }
