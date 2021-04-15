@@ -120,7 +120,7 @@ __global__ void do_semi_step_add(double *state_out, double *state_init, double *
 		int ll= id /(nnz * nnx);
     	int k = (id / nnx) % nnz;
     	int i = id % nnx;
-		int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+		  int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
     	int indt = ll*nnz*nnx + k*nnx + i;
     	state_out[inds] = state_init[inds] + dt * tend[indt];
 	}
@@ -377,6 +377,7 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
+  cudaDeviceSynchronize();
 }
 
 
@@ -433,7 +434,8 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	int n = (nnz) * (nnx + 1);
 	int gridSize = (n + blockSize - 1) / blockSize;
 
-	do_dir_x_flux<<<blockSize, gridSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
+	do_dir_x_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
+  cudaDeviceSynchronize();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -454,6 +456,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
+  cudaDeviceSynchronize();
 }
 
 
@@ -512,8 +515,8 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   int n = (nnz + 1) * nnx;
   int gridSize = (n + blockSize - 1) / blockSize;;
 
-  do_dir_z_flux<<<blockSize, gridSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
-
+  do_dir_z_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
+  cudaDeviceSynchronize();
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
@@ -536,7 +539,8 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   n = NUM_VARS * nnz * nnx;
   gridSize = (n + blockSize - 1) / blockSize;;
 
-  do_dir_z_add<<<blockSize, gridSize>>>(state, tend, flux, n);
+  do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
+  cudaDeviceSynchronize();
 }
 
 
@@ -568,7 +572,8 @@ void exchange_border_x( double *state ) {
 	int n = NUM_VARS * nnz;
 	int gridSize = (n + blockSize - 1)/blockSize;
 
-	exchange_border_x_1<<<blockSize, gridSize>>>(state, n);
+	exchange_border_x_1<<<gridSize, blockSize>>>(state, n);
+  cudaDeviceSynchronize();
   ////////////////////////////////////////////////////
 
   if (config_spec == CONFIG_IN_TEST6) {
@@ -589,7 +594,8 @@ void exchange_border_x( double *state ) {
 		n = nnz * hs;
 		gridSize = (n + blockSize - 1)/blockSize;
 
-		exchange_border_x_2<<<blockSize, gridSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
+		exchange_border_x_2<<<gridSize, blockSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
+    cudaDeviceSynchronize();
     }
   }
 }
@@ -636,7 +642,8 @@ void exchange_border_z( double *state ) {
 	int n = NUM_VARS * (nnx+2*hs);
 	int gridSize = (n + blockSize - 1)/blockSize;
 
-	exchange_border_z_1<<<blockSize, gridSize>>>(state, n, mnt_width);
+	exchange_border_z_1<<<gridSize, blockSize>>>(state, n, mnt_width);
+  cudaDeviceSynchronize();
 }
 
 
@@ -985,6 +992,7 @@ int main(int argc, char **argv) {
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
     do_timestep(state_gpu,state_tmp_gpu,flux_gpu,tend_gpu,dt);
+    cudaDeviceSynchronize();
     //Update the elapsed time and output counter
     etime = etime + dt;
     output_counter = output_counter + dt;

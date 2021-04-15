@@ -8,4 +8,4 @@ CONFIG=CONFIG_IN_TEST1
 SIM_TIME=400
 
 # TODO modifique a compilacao do programa abaixo se precisar
-nvcc -D_NX=$NX -D_NZ=$NZ -D_SIM_TIME=$SIM_TIME -D_OUT_FREQ=$FREQ -D_IN_CONFIG=$CONFIG -O3 -o miniCFD miniCFD_gpu.cu 
+nvcc -D_NX=$NX -D_NZ=$NZ -D_SIM_TIME=$SIM_TIME -D_OUT_FREQ=$FREQ -D_IN_CONFIG=$CONFIG -std=c++11 -O3 -o miniCFD miniCFD_gpu.cu 
