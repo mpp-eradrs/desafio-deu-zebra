@@ -304,7 +304,25 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   }
 }
 
+// CUDA kernel. 
+__global__ void copyStatesX(double *d, int n, int nnx_, int nnz_)
+{
+    // Get our global thread ID
+    int id = blockIdx.x*blockDim.x+threadIdx.x;
+ 
+    // Make sure we do not go out of bounds
+    if (id < n){
+        int ll = id / nnz_;
+        int k = id % nnz_;
 
+        int pos = ll*(nnz_+4)*(nnx_+4) + (k+hs)*(nnx_+4);
+
+        d[pos      ] = d[pos + nnx_];
+        d[pos + 1      ] = d[pos + nnx_+1];
+        d[pos + nnx_+2  ] = d[pos + 2     ];
+        d[pos + nnx_+3] = d[pos + 3   ];
+    }    
+}
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void exchange_border_x( double *state ) {
@@ -321,16 +339,24 @@ void exchange_border_x( double *state ) {
   //////////////////////////////////////////////////////
   // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
   //////////////////////////////////////////////////////
-  for (ll=0; ll<NUM_VARS; ll++) {
-    #pragma omp parallel for
-    for (k=0; k<nnz; k++) {
-      int pos = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs);
-      state[pos + 0      ] = state[pos + nnx+hs-2];
-      state[pos + 1      ] = state[pos + nnx+hs-1];
-      state[pos + nnx+hs  ] = state[pos + hs     ];
-      state[pos + nnx+hs+1] = state[pos + hs+1   ];
-    }
-  }
+  int n = NUM_VARS * nnz; // Total of iterations
+  double *d_state;        // Device copy
+
+  // Size in bytes
+  size_t bytes = ((nnx+2*hs)*(nnz+2*hs)*NUM_VARS)*sizeof(double);
+
+  cudaMalloc(&d_state, bytes);                                // Allocate memory for device on GPU
+  cudaMemcpy(d_state, state, bytes, cudaMemcpyHostToDevice);  // Copy host vector to device
+
+  int blockSize, gridSize;
+  blockSize = 1024;                          // Number of threads in each thread block
+  gridSize = (int)ceil((float)n/blockSize);  // Number of thread blocks in grid
+
+
+  copyStatesX<<<gridSize, blockSize>>>(d_state, n, nnx, nnz); // Execute the kernel
+  cudaMemcpy(state, d_state, bytes, cudaMemcpyDeviceToHost);  // Copy array back to host
+
+  cudaFree(d_state); // Release device memory
   ////////////////////////////////////////////////////
 
   if (config_spec == CONFIG_IN_TEST6) {
