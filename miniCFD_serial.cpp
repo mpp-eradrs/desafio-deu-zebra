@@ -358,6 +358,7 @@ void exchange_border_z( double *state ) {
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
+  #pragma omp parallel for
   for (int ll=0; ll<NUM_VARS; ll++) {
     for (int i=0; i<nnx+2*hs; i++) {
       if (ll == POS_WMOM) {
