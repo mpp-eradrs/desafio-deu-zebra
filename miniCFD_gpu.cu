@@ -44,26 +44,21 @@ double qweights[] = { 0.277777777777777777777777777778E0 , 0.4444444444444444444
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are initialized but remain static over the coure of the simulation
 ///////////////////////////////////////////////////////////////////////////////////////
-const double sim_time = _SIM_TIME;              //total simulation time in seconds
-const double output_freq = _OUT_FREQ;           //frequency to perform output in seconds
+double sim_time;              //total simulation time in seconds
+double output_freq;           //frequency to perform output in seconds
 double dt;                    //Model time step (seconds)
-const int    nx_cfd = _NX, nz_cfd = _NZ;      //Number of total grid cells in the x- and z- dimensions
-const int    nnx = nx_cfd, nnz = nz_cfd;                //Number of local grid cells in the x- and z- dimensions for this MPI task
-const double dx = xlen / nx_cfd, dz = zlen / nz_cfd;;                //Grid space length in x- and z-dimension (meters)
-const int    i_beg = 0, k_beg = 0;          //beginning index in the x- and z-directions for this MPI task
-const int    nranks = 1, myrank = 0;        //Number of MPI ranks and my rank id
-const int    masterproc = (myrank == 0);            //Am I the master process (rank == 0)?
-const int    config_spec = _IN_CONFIG;         //Which data initialization to use
+int    nnx, nnz;                //Number of local grid cells in the x- and z- dimensions for this MPI task
+double dx, dz;                //Grid space length in x- and z-dimension (meters)
+int    nx_cfd, nz_cfd;      //Number of total grid cells in the x- and z- dimensions
+int    i_beg, k_beg;          //beginning index in the x- and z-directions for this MPI task
+int    nranks, myrank;        //Number of MPI ranks and my rank id
+int    masterproc;            //Am I the master process (rank == 0)?
+int    config_spec;         //Which data initialization to use
 double *cfd_dens_cell;         //density (vert cell avgs).   Dimensions: (1-hs:nnz+hs)
-double *cfd_dens_cell_gpu;
 double *cfd_dens_theta_cell;   //rho*t (vert cell avgs).     Dimensions: (1-hs:nnz+hs)
-double *cfd_dens_theta_cell_gpu;
 double *cfd_dens_int;          //density (vert cell interf). Dimensions: (1:nnz+1)
-double *cfd_dens_int_gpu;
 double *cfd_dens_theta_int;    //rho*t (vert cell interf).   Dimensions: (1:nnz+1)
-double *cfd_dens_theta_int_gpu;
 double *cfd_pressure_int;      //press (vert cell interf).   Dimensions: (1:nnz+1)
-double *cfd_pressure_int_gpu;
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are dynamics over the course of the simulation
@@ -72,13 +67,9 @@ double etime;                 //Elapsed model time
 double output_counter;        //Helps determine when it's time to do output
 //Runtime variable arrays
 double *state;                //Fluid state.             Dimensions: (1-hs:nnx+hs,1-hs:nnz+hs,NUM_VARS)
-double *state_gpu;
 double *state_tmp;            //Fluid state.             Dimensions: (1-hs:nnx+hs,1-hs:nnz+hs,NUM_VARS)
-double *state_tmp_gpu;
 double *flux;                 //Cell interface fluxes.   Dimensions: (nnx+1,nnz+1,NUM_VARS)
-double *flux_gpu;
 double *tend;                 //Fluid state tendencies.  Dimensions: (nnx,nnz,NUM_VARS)
-double *tend_gpu;
 int    num_out = 0;           //The number of outputs performed so far
 int    direction_switch = 1;
 double mass0, te0;            //Initial domain totals for mass and total energy  
@@ -109,207 +100,6 @@ void   do_dir_z ( double *state , double *flux , double *tend );
 void   exchange_border_x    ( double *state );
 void   exchange_border_z    ( double *state );
 void   do_results           ( double &mass , double &te );
-
-const int blockSize = 1024;
-
-__global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, int dt){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int ll= id /(nnz * nnx);
-    	int k = (id / nnx) % nnz;
-    	int i = id % nnx;
-		  int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-    	int indt = ll*nnz*nnx + k*nnx + i;
-    	state_out[inds] = state_init[inds] + dt * tend[indt];
-	}
-}
-
-__global__ void do_dir_x_flux(double *state, double *flux, double *tend, double *cfd_dens_cell, double *cfd_dens_theta_cell, int n, double v_coef){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		
-		int k = id / (nnx + 1);
-    	int i = id % (nnx + 1);
-
-		double vals[NUM_VARS], d_vals[NUM_VARS];
-
-		for (int ll=0; ll<NUM_VARS; ll++) {
-      
-			double stencil[4];
-		
-			for (int s=0; s < cfd_size; s++) {
-				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-				stencil[s] = state[inds];
-			}
-		
-			//Fourth-order-accurate interpolation of the state
-			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-			//First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-		}
-
-		double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
-		double u = vals[POS_UMOM] / r;
-		double w = vals[POS_WMOM] / r;
-		double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
-		double p = pow((r*t),gamm)*C0;
-
-		flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
-		flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
-		flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
-		flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
-	}
-}
-
-__global__ void do_dir_x_add(double *tend, double *flux, int n){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int ll= id /(nnz * nnx);
-    	int k = (id / nnx) % nnz;
-    	int i = id % nnx;
-		int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-		int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-		int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
-		tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
-	}
-}
-
-__global__ void do_dir_z_flux(double *state , double *flux, double *tend, double *cfd_dens_int, double *cfd_dens_theta_int, double *cfd_pressure_int, int n, double v_coef){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-	
-	if(id < n){
-	
-		int k = id / nnx;
-    	int i = id % nnx;
-		//Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-		
-		double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
-		
-		for (int ll=0; ll<NUM_VARS; ll++) {
-			for (int s=0; s<cfd_size; s++) {
-				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-				stencil[s] = state[inds];
-			}
-			//Fourth-order-accurate interpolation of the state
-			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-			//First-order-accurate interpolation of the third spatial derivative of the state
-			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-		}
-
-		//Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-		double r = vals[POS_DENS] + cfd_dens_int[k];
-		double u = vals[POS_UMOM] / r;
-		double w = vals[POS_WMOM] / r;
-		double t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
-		double p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
-		//Enforce vertical boundary condition and exact mass conservation
-		if (k == 0 || k == nnz) {
-			w = 0;
-			d_vals[POS_DENS] = 0;
-		}
-
-		//Compute the flux vector with viscosity
-		flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
-		flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
-		flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
-		flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
-	}
-}
-
-__global__ void do_dir_z_add(double *state, double *tend, double *flux, int n){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int ll= id /(nnz * nnx);
-		int k = (id / nnx) % nnz;
-		int i = id % nnx;
-		int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-		int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
-		int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
-		tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
-		if (ll == POS_WMOM) {
-			int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
-			tend[indt] = tend[indt] - state[inds]*grav;
-		}
-	}
-}
-
-__global__ void exchange_border_x_1(double *state, int n){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int ll = id / nnz;
-		int k = id % nnz;
-		int pos = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs);
-		state[pos + 0      ] = state[pos + nnx+hs-2];
-		state[pos + 1      ] = state[pos + nnx+hs-1];
-		state[pos + nnx+hs  ] = state[pos + hs     ];
-		state[pos + nnx+hs+1] = state[pos + hs+1   ];
-	}
-}
-
-__global__ void exchange_border_x_2(double *state, double *cfd_dens_cell, double *cfd_dens_theta_cell, int n){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int k = id / hs;
-		int i = id % hs;
-		double z = (k_beg + k+0.5)*dz;
-		if (fabs(z-3*zlen/4) <= zlen/16) {
-			int ind_r = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-			int ind_u = POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-			int ind_t = POS_RHOT*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-			state[ind_u] = (state[ind_r]+cfd_dens_cell[k+hs]) * 50.;
-			state[ind_t] = (state[ind_r]+cfd_dens_cell[k+hs]) * 298. - cfd_dens_theta_cell[k+hs];
-		}
-	}
-}
-
-__global__ void exchange_border_z_1(double *state, int n, int mnt_width){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-		int ll = id / (nnx+2*hs);
-		int i = id % (nnx+2*hs);
-		
-		int pos = ll*(nnz+2*hs)*(nnx+2*hs);
-      
-		if (ll == POS_WMOM) {
-			state[pos + (0      )*(nnx+2*hs) + i] = 0.;
-			state[pos + (1      )*(nnx+2*hs) + i] = 0.;
-			state[pos + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
-			state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
-			//Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
-			if (config_spec == CONFIG_IN_TEST3) {
-			double x = (i_beg+i-hs+0.5)*dx;
-			if ( fabs(x-xlen/4) < mnt_width ) {
-				double xloc = (x-(xlen/4)) / mnt_width;
-				//Compute the derivative of the fake mountain
-				double mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
-				//w = (dz/dx)*u
-				state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (0)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-				state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (1)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-			}
-			}
-		} else {
-			state[pos + (0      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-			state[pos + (1      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-			state[pos + (nnz+hs  )*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-			state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-		}
-	}
-}
 
 //Performs a single dimensionally split time step using a simple low-storate three-stage Runge-Kutta time integrator
 //The dimensional splitting is a second-order-accurate alternating Strang splitting in which the
@@ -363,21 +153,15 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Apply the tendencies to the fluid state
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-//     int indt = ll*nnz*nnx + k*nnx + i;
-//     state_out[inds] = state_init[inds] + dt * tend[indt];
-//   }
-
-	int n = NUM_VARS * nnz * nnx;
-	int gridSize = (n + blockSize - 1) / blockSize;
-
-	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
-  cudaDeviceSynchronize();
+  #pragma omp parallel for
+  for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
+    int ll= a /(nnz * nnx);
+    int k = (a / nnx) % nnz;
+    int i = a % nnx;
+    int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+    int indt = ll*nnz*nnx + k*nnx + i;
+    state_out[inds] = state_init[inds] + dt * tend[indt];
+  }
 }
 
 
@@ -393,70 +177,58 @@ void do_dir_x( double *state , double *flux , double *tend ) {
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-//   #pragma omp parallel for
-//   for(int a = 0; a < (nnz) * (nnx + 1); a++){
+  #pragma omp parallel for
+  for(int a = 0; a < (nnz) * (nnx + 1); a++){
 
-//     int k = a / (nnx + 1);
-//     int i = a % (nnx + 1);
-//     //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+    int k = a / (nnx + 1);
+    int i = a % (nnx + 1);
+    //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
     
-//     double vals[NUM_VARS], d_vals[NUM_VARS];
+    double vals[NUM_VARS], d_vals[NUM_VARS];
     
-//     for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int ll=0; ll<NUM_VARS; ll++) {
       
-//       double stencil[4];
+      double stencil[4];
       
-//       for (int s=0; s < cfd_size; s++) {
-//         int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-//         stencil[s] = state[inds];
-//       }
+      for (int s=0; s < cfd_size; s++) {
+        int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
+        stencil[s] = state[inds];
+      }
 
-//       //Fourth-order-accurate interpolation of the state
-//       vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-//       //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-//       d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-//     }
+      //Fourth-order-accurate interpolation of the state
+      vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+      //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+      d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+    }
 
-//     //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-//     double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
-//     double u = vals[POS_UMOM] / r;
-//     double w = vals[POS_WMOM] / r;
-//     double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
-//     double p = pow((r*t),gamm)*C0;
+    //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+    double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
+    double u = vals[POS_UMOM] / r;
+    double w = vals[POS_WMOM] / r;
+    double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
+    double p = pow((r*t),gamm)*C0;
 
-//     //Compute the flux vector
-//     flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
-//     flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
-//     flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
-//     flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
-//   }
-
-	int n = (nnz) * (nnx + 1);
-	int gridSize = (n + blockSize - 1) / blockSize;
-
-	do_dir_x_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
-  cudaDeviceSynchronize();
+    //Compute the flux vector
+    flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
+    flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
+    flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
+    flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
+  }
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-//     int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-//     int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
-//     tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
-//   }
-
-	n = NUM_VARS * nnz * nnx;
-	gridSize = (n + blockSize - 1) / blockSize;
-
-	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
-  cudaDeviceSynchronize();
+  #pragma omp parallel for
+  for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
+    int ll= a /(nnz * nnx);
+    int k = (a / nnx) % nnz;
+    int i = a % nnx;
+    int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+    int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
+    int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
+    tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
+  }
 }
 
 
@@ -473,74 +245,63 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Compute fluxes in the x-direction for each cell
-//   #pragma omp parallel for
-//   for(int a = 0; a < (nnz + 1) * nnx; a++){
+  #pragma omp parallel for
+  for(int a = 0; a < (nnz + 1) * nnx; a++){
 
-//     int k = a / nnx;
-//     int i = a % nnx;
-//     //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
+    int k = a / nnx;
+    int i = a % nnx;
+    //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
     
-//     double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
+    double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
     
-//     for (int ll=0; ll<NUM_VARS; ll++) {
-//       for (int s=0; s<cfd_size; s++) {
-//         int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-//         stencil[s] = state[inds];
-//       }
-//       //Fourth-order-accurate interpolation of the state
-//       vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-//       //First-order-accurate interpolation of the third spatial derivative of the state
-//       d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-//     }
+    for (int ll=0; ll<NUM_VARS; ll++) {
+      for (int s=0; s<cfd_size; s++) {
+        int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
+        stencil[s] = state[inds];
+      }
+      //Fourth-order-accurate interpolation of the state
+      vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+      //First-order-accurate interpolation of the third spatial derivative of the state
+      d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+    }
 
-//     //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-//     double r = vals[POS_DENS] + cfd_dens_int[k];
-//     double u = vals[POS_UMOM] / r;
-//     double w = vals[POS_WMOM] / r;
-//     double t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
-//     double p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
-//     //Enforce vertical boundary condition and exact mass conservation
-//     if (k == 0 || k == nnz) {
-//       w                = 0;
-//       d_vals[POS_DENS] = 0;
-//     }
+    //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
+    double r = vals[POS_DENS] + cfd_dens_int[k];
+    double u = vals[POS_UMOM] / r;
+    double w = vals[POS_WMOM] / r;
+    double t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
+    double p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
+    //Enforce vertical boundary condition and exact mass conservation
+    if (k == 0 || k == nnz) {
+      w                = 0;
+      d_vals[POS_DENS] = 0;
+    }
 
-//     //Compute the flux vector with viscosity
-//     flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
-//     flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
-//     flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
-//     flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
-//   }
+    //Compute the flux vector with viscosity
+    flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
+    flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
+    flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
+    flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
+  }
 
-  int n = (nnz + 1) * nnx;
-  int gridSize = (n + blockSize - 1) / blockSize;;
-
-  do_dir_z_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
-  cudaDeviceSynchronize();
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
   //Use the fluxes to compute tendencies for each cell
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-//     int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
-//     int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
-//     tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
-//     if (ll == POS_WMOM) {
-//       int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
-//       tend[indt] = tend[indt] - state[inds]*grav;
-//     }
-//   }
-
-  n = NUM_VARS * nnz * nnx;
-  gridSize = (n + blockSize - 1) / blockSize;;
-
-  do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
-  cudaDeviceSynchronize();
+  #pragma omp parallel for
+  for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
+    int ll= a /(nnz * nnx);
+    int k = (a / nnx) % nnz;
+    int i = a % nnx;
+    int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+    int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
+    int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
+    tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
+    if (ll == POS_WMOM) {
+      int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
+      tend[indt] = tend[indt] - state[inds]*grav;
+    }
+  }
 }
 
 // CUDA kernel. 
@@ -565,6 +326,8 @@ __global__ void copyStatesX(double *d, int n, int nnx_, int nnz_)
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void exchange_border_x( double *state ) {
+  int k, ll, ind_r, ind_u, ind_t, i;
+  double z;
   ////////////////////////////////////////////////////////////////////////
   // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
   // (1) give    state(1:hs,1:nnz,1:NUM_VARS)       to   my left  neighbor
@@ -576,44 +339,41 @@ void exchange_border_x( double *state ) {
   //////////////////////////////////////////////////////
   // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
   //////////////////////////////////////////////////////
-//   for (ll=0; ll<NUM_VARS; ll++) {
-//     #pragma omp parallel for
-//     for (k=0; k<nnz; k++) {
-//       int pos = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs);
-//       state[pos + 0      ] = state[pos + nnx+hs-2];
-//       state[pos + 1      ] = state[pos + nnx+hs-1];
-//       state[pos + nnx+hs  ] = state[pos + hs     ];
-//       state[pos + nnx+hs+1] = state[pos + hs+1   ];
-//     }
-//   }
+  int n = NUM_VARS * nnz; // Total of iterations
+  double *d_state;        // Device copy
 
-	int n = NUM_VARS * nnz;
-	int gridSize = (n + blockSize - 1)/blockSize;
+  // Size in bytes
+  size_t bytes = ((nnx+2*hs)*(nnz+2*hs)*NUM_VARS)*sizeof(double);
 
-	exchange_border_x_1<<<gridSize, blockSize>>>(state, n);
-  cudaDeviceSynchronize();
+  cudaMalloc(&d_state, bytes);                                // Allocate memory for device on GPU
+  cudaMemcpy(d_state, state, bytes, cudaMemcpyHostToDevice);  // Copy host vector to device
+
+  int blockSize, gridSize;
+  blockSize = 1024;                          // Number of threads in each thread block
+  gridSize = (int)ceil((float)n/blockSize);  // Number of thread blocks in grid
+
+
+  copyStatesX<<<gridSize, blockSize>>>(d_state, n, nnx, nnz); // Execute the kernel
+  cudaMemcpy(state, d_state, bytes, cudaMemcpyDeviceToHost);  // Copy array back to host
+
+  cudaFree(d_state); // Release device memory
   ////////////////////////////////////////////////////
 
   if (config_spec == CONFIG_IN_TEST6) {
     if (myrank == 0) {
-    //   #pragma omp parallel for
-    //   for (k=0; k<nnz; k++) {
-    //     for (i=0; i<hs; i++) {
-    //       z = (k_beg + k+0.5)*dz;
-    //       if (fabs(z-3*zlen/4) <= zlen/16) {
-    //         ind_r = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         ind_u = POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         ind_t = POS_RHOT*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         state[ind_u] = (state[ind_r]+cfd_dens_cell[k+hs]) * 50.;
-    //         state[ind_t] = (state[ind_r]+cfd_dens_cell[k+hs]) * 298. - cfd_dens_theta_cell[k+hs];
-    //       }
-    //     }
-    //   }
-		n = nnz * hs;
-		gridSize = (n + blockSize - 1)/blockSize;
-
-		exchange_border_x_2<<<gridSize, blockSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
-    cudaDeviceSynchronize();
+      #pragma omp parallel for
+      for (k=0; k<nnz; k++) {
+        for (i=0; i<hs; i++) {
+          z = (k_beg + k+0.5)*dz;
+          if (fabs(z-3*zlen/4) <= zlen/16) {
+            ind_r = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+            ind_u = POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+            ind_t = POS_RHOT*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+            state[ind_u] = (state[ind_r]+cfd_dens_cell[k+hs]) * 50.;
+            state[ind_t] = (state[ind_r]+cfd_dens_cell[k+hs]) * 298. - cfd_dens_theta_cell[k+hs];
+          }
+        }
+      }
     }
   }
 }
@@ -626,42 +386,37 @@ void exchange_border_z( double *state ) {
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
-//   #pragma omp parallel for
-//   for (int ll=0; ll<NUM_VARS; ll++) {
-//     for (int i=0; i<nnx+2*hs; i++) {
+  #pragma omp parallel for
+  for (int ll=0; ll<NUM_VARS; ll++) {
+    for (int i=0; i<nnx+2*hs; i++) {
       
-//       int pos = ll*(nnz+2*hs)*(nnx+2*hs);
+      int pos = ll*(nnz+2*hs)*(nnx+2*hs);
       
-//       if (ll == POS_WMOM) {
-//         state[pos + (0      )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (1      )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
-//         //Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
-//         if (config_spec == CONFIG_IN_TEST3) {
-//           double x = (i_beg+i-hs+0.5)*dx;
-//           if ( fabs(x-xlen/4) < mnt_width ) {
-//             double xloc = (x-(xlen/4)) / mnt_width;
-//             //Compute the derivative of the fake mountain
-//             double mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
-//             //w = (dz/dx)*u
-//             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (0)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-//             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (1)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-//           }
-//         }
-//       } else {
-//         state[pos + (0      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-//         state[pos + (1      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-//         state[pos + (nnz+hs  )*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-//         state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-//       }
-//     }
-//   }
-	int n = NUM_VARS * (nnx+2*hs);
-	int gridSize = (n + blockSize - 1)/blockSize;
-
-	exchange_border_z_1<<<gridSize, blockSize>>>(state, n, mnt_width);
-  cudaDeviceSynchronize();
+      if (ll == POS_WMOM) {
+        state[pos + (0      )*(nnx+2*hs) + i] = 0.;
+        state[pos + (1      )*(nnx+2*hs) + i] = 0.;
+        state[pos + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
+        state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
+        //Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
+        if (config_spec == CONFIG_IN_TEST3) {
+          double x = (i_beg+i-hs+0.5)*dx;
+          if ( fabs(x-xlen/4) < mnt_width ) {
+            double xloc = (x-(xlen/4)) / mnt_width;
+            //Compute the derivative of the fake mountain
+            double mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
+            //w = (dz/dx)*u
+            state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (0)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
+            state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (1)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
+          }
+        }
+      } else {
+        state[pos + (0      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
+        state[pos + (1      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
+        state[pos + (nnz+hs  )*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
+        state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
+      }
+    }
+  }
 }
 
 
@@ -669,11 +424,37 @@ void initialize( int *argc , char ***argv ) {
   int    i, k, ii, kk, ll, inds;
   double x, z, r, u, w, t, hr, ht;
 
+  //Set the cell grid size
+  dx = xlen / nx_cfd;
+  dz = zlen / nz_cfd;
+
+  /////////////////////////////////////////////////////////////
+  // BEGIN MPI DUMMY SECTION
+  // TODO: (1) GET NUMBER OF MPI RANKS
+  //       (2) GET MY MPI RANK ID (RANKS ARE ZERO-BASED INDEX)
+  //       (3) COMPUTE MY BEGINNING "I" INDEX (1-based index)
+  //       (4) COMPUTE HOW MANY X-DIRECTION CELLS MY RANK HAS
+  //       (5) FIND MY LEFT AND RIGHT NEIGHBORING RANK IDs
+  /////////////////////////////////////////////////////////////
+  i_beg = 0;
+  nnx = nx_cfd;
+  nranks = 1;
+  myrank = 0;
+  //////////////////////////////////////////////
+  // END MPI DUMMY SECTION
+  //////////////////////////////////////////////
+
+
   ////////////////////////////////////////////////////////////////////////////////
   ////////////////////////////////////////////////////////////////////////////////
   // YOU DON'T NEED TO ALTER ANYTHING BELOW THIS POINT IN THE CODE
   ////////////////////////////////////////////////////////////////////////////////
   ////////////////////////////////////////////////////////////////////////////////
+
+  //Vertical direction isn't MPI-ized, so the rank's local values = the global values
+  k_beg = 0;
+  nnz = nz_cfd;
+  masterproc = (myrank == 0);
 
   //Allocate the model data
   state              = (double *) malloc( (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double) );
@@ -685,17 +466,6 @@ void initialize( int *argc , char ***argv ) {
   cfd_dens_int        = (double *) malloc( (nnz+1)*sizeof(double) );
   cfd_dens_theta_int  = (double *) malloc( (nnz+1)*sizeof(double) );
   cfd_pressure_int    = (double *) malloc( (nnz+1)*sizeof(double) );
-
-  //Allocate GPU memory
-  cudaMalloc(&state_gpu, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double) );
-  cudaMalloc(&state_tmp_gpu, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double) );
-  cudaMalloc(&flux_gpu, (nnx+1)*(nnz+1)*NUM_VARS*sizeof(double) );
-  cudaMalloc(&tend_gpu, nnx*nnz*NUM_VARS*sizeof(double) );
-  cudaMalloc(&cfd_dens_cell_gpu, (nnz+2*hs)*sizeof(double) );
-  cudaMalloc(&cfd_dens_theta_cell_gpu, (nnz+2*hs)*sizeof(double) );
-  cudaMalloc(&cfd_dens_int_gpu, (nnz+1)*sizeof(double) );
-  cudaMalloc(&cfd_dens_theta_int_gpu, (nnz+1)*sizeof(double) );
-  cudaMalloc(&cfd_pressure_int_gpu, (nnz+1)*sizeof(double) );
 
   //Define the maximum stable time step based on an assumed maximum wind speed
   dt = dmin(dx,dz) / max_speed * cfl;
@@ -964,42 +734,29 @@ void do_results( double &mass , double &te ) {
   }
 }
 
-void copy_to_gpu(){
-  cudaMemcpy(state_gpu, state, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(state_tmp_gpu, state_tmp, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(flux_gpu, flux, (nnx+1)*(nnz+1)*NUM_VARS*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(tend_gpu, tend, nnx*nnz*NUM_VARS*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(cfd_dens_cell_gpu, cfd_dens_cell, (nnz+2*hs)*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(cfd_dens_theta_cell_gpu, cfd_dens_theta_cell, (nnz+2*hs)*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(cfd_dens_int_gpu, cfd_dens_int, (nnz+1)*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(cfd_dens_theta_int_gpu, cfd_dens_theta_int, (nnz+1)*sizeof(double), cudaMemcpyHostToDevice);
-  cudaMemcpy(cfd_pressure_int_gpu, cfd_pressure_int, (nnz+1)*sizeof(double), cudaMemcpyHostToDevice);
-}
-
-void copy_to_cpu(){
-  cudaMemcpy(state, state_gpu, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(state_tmp, state_tmp_gpu, (nnx+2*hs)*(nnz+2*hs)*NUM_VARS*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(flux, flux_gpu, (nnx+1)*(nnz+1)*NUM_VARS*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(tend, tend_gpu, nnx*nnz*NUM_VARS*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(cfd_dens_cell, cfd_dens_cell_gpu, (nnz+2*hs)*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(cfd_dens_theta_cell, cfd_dens_theta_cell_gpu, (nnz+2*hs)*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(cfd_dens_int, cfd_dens_int_gpu, (nnz+1)*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(cfd_dens_theta_int, cfd_dens_theta_int_gpu, (nnz+1)*sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(cfd_pressure_int, cfd_pressure_int_gpu, (nnz+1)*sizeof(double), cudaMemcpyDeviceToHost);
-}
 
 ///////////////////////////////////////////////////////////////////////////////////////
 // THE MAIN PROGRAM STARTS HERE
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
-  
+  ///////////////////////////////////////////////////////////////////////////////////////
+  // BEGIN USER-CONFIGURABLE PARAMETERS
+  ///////////////////////////////////////////////////////////////////////////////////////
+  //The x-direction length is twice as long as the z-direction length
+  //So, you'll want to have nx_cfd be twice as large as nz_cfd
+  nx_cfd = _NX;      //Number of total cells in the x-dirction
+  nz_cfd = _NZ;       //Number of total cells in the z-dirction
+  sim_time = _SIM_TIME;     //How many seconds to run the simulation
+  output_freq = _OUT_FREQ;   //How frequently to output data to file (in seconds)
+  config_spec = _IN_CONFIG;  //How to initialize the data
+  ///////////////////////////////////////////////////////////////////////////////////////
+  // END USER-CONFIGURABLE PARAMETERS
+  ///////////////////////////////////////////////////////////////////////////////////////
+
   initialize( &argc , &argv );
 
   //Initial reductions for mass, kinetic energy, and total energy
   do_results(mass0,te0);
-
-  //Copying data to GPU
-  copy_to_gpu();
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -1009,8 +766,7 @@ int main(int argc, char **argv) {
     //If the time step leads to exceeding the simulation time, shorten it for the last step
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
-    do_timestep(state_gpu,state_tmp_gpu,flux_gpu,tend_gpu,dt);
-    cudaDeviceSynchronize();
+    do_timestep(state,state_tmp,flux,tend,dt);
     //Update the elapsed time and output counter
     etime = etime + dt;
     output_counter = output_counter + dt;
@@ -1025,8 +781,6 @@ int main(int argc, char **argv) {
   if (masterproc) {
     std::cout << "CPU Time: " << ( (double) (c_end-c_start) ) / CLOCKS_PER_SEC << " sec\n";
   }
-
-  copy_to_cpu();
 
   //Final reductions for mass, kinetic energy, and total energy
   do_results(mass,te);
