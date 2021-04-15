@@ -323,6 +323,7 @@ void exchange_border_x( double *state ) {
   // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
   //////////////////////////////////////////////////////
   for (ll=0; ll<NUM_VARS; ll++) {
+    #pragma omp parallel for
     for (k=0; k<nnz; k++) {
       state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + 0      ] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs-2];
       state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + 1      ] = state[ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + nnx+hs-1];
@@ -334,6 +335,7 @@ void exchange_border_x( double *state ) {
 
   if (config_spec == CONFIG_IN_TEST6) {
     if (myrank == 0) {
+      #pragma omp parallel for
       for (k=0; k<nnz; k++) {
         for (i=0; i<hs; i++) {
           z = (k_beg + k+0.5)*dz;
