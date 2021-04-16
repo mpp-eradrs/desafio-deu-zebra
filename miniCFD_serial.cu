@@ -65,13 +65,6 @@ double *cfd_dens_theta_int_gpu;
 double *cfd_pressure_int_cpu;      //press (vert cell interf).   Dimensions: (1:nnz+1)
 double *cfd_pressure_int_gpu;
 
-// Gabriel pre-calc
-int *preCalcINDS_do_semi_step_add;
-int *preCalcINDT_do_semi_step_add;
-int *preCalcINDT_do_dir_x_z_add;
-int *preCalcINDF1_do_dir_x_z_add;
-int *preCalcINDF2_do_dir_x_z_add;
-
 ///////////////////////////////////////////////////////////////////////////////////////
 // Variables that are dynamics over the course of the simulation
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -119,13 +112,17 @@ void   do_results           ( double &mass , double &te );
 
 const int blockSize = 1024;
 
-__global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, int dt, int *preCalcINDS_do_semi_step_add,
-                                                                                                     int *preCalcINDT_do_semi_step_add){
+__global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, int dt){
 	
 	int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
-    	state_out[preCalcINDS_do_semi_step_add[id]] = state_init[preCalcINDS_do_semi_step_add[id]] + dt * tend[preCalcINDT_do_semi_step_add[id]];
+		  int ll= id /(nnz * nnx);
+    	int k = (id / nnx) % nnz;
+    	int i = id % nnx;
+		  int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
+    	int indt = ll*nnz*nnx + k*nnx + i;
+    	state_out[inds] = state_init[inds] + dt * tend[indt];
 	}
 }
 
@@ -169,14 +166,18 @@ __global__ void do_dir_x_flux(double *state, double *flux, double *tend, double 
   }
 }
 
-__global__ void do_dir_x_add(double *tend, double *flux, int n, int *preCalcINDT_do_dir_x_z_add,
-                                                                int *preCalcINDF1_do_dir_x_z_add,
-                                                                int *preCalcINDF2_do_dir_x_z_add){
+__global__ void do_dir_x_add(double *tend, double *flux, int n){
 	
 	int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
-		tend[preCalcINDT_do_dir_x_z_add[id]] = -( flux[preCalcINDF2_do_dir_x_z_add[id]] - flux[preCalcINDF1_do_dir_x_z_add[id]] ) / dx;
+		int ll= id /(nnz * nnx);
+    	int k = (id / nnx) % nnz;
+    	int i = id % nnx;
+		int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+		int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
+		int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
+		tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
 	}
 }
 
@@ -228,9 +229,7 @@ __global__ void do_dir_z_flux(double *state , double *flux, double *tend, double
 	}
 }
 
-__global__ void do_dir_z_add(double *state, double *tend, double *flux, int n, int *preCalcINDT_do_dir_x_z_add,
-                                                                               int *preCalcINDF1_do_dir_x_z_add,
-                                                                               int *preCalcINDF2_do_dir_x_z_add){
+__global__ void do_dir_z_add(double *state, double *tend, double *flux, int n){
 	
 	int id = blockIdx.x*blockDim.x+threadIdx.x;
 
@@ -239,17 +238,17 @@ __global__ void do_dir_z_add(double *state, double *tend, double *flux, int n, i
   }
 
 	if(id < n){
-		tend[preCalcINDT_do_dir_x_z_add[id]] = -( flux[preCalcINDF2_do_dir_x_z_add[id]] - flux[preCalcINDF1_do_dir_x_z_add[id]] ) / dz;
-
-    int ll = id /(nnz * nnx);
+		int ll= id /(nnz * nnx);
+		int k = (id / nnx) % nnz;
+		int i = id % nnx;
+		int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
+		int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
+		int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
+		tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
 
     if (ll == POS_WMOM) {
-      
-      int k = (id / nnx) % nnz;
-      int i = id % nnx;
-
 			int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
-			tend[preCalcINDT_do_dir_x_z_add[id]] = tend[preCalcINDT_do_dir_x_z_add[id]] - state[inds]*grav;
+			tend[indt] = tend[indt] - state[inds]*grav;
     }
 	}
 }
@@ -389,8 +388,7 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 	int n = NUM_VARS * nnz * nnx;
 	int gridSize = (n + blockSize - 1) / blockSize;
 
-	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt, preCalcINDS_do_semi_step_add,
-                                                                                preCalcINDT_do_semi_step_add);
+	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
   cudaDeviceSynchronize();
 }
 
@@ -469,9 +467,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	n = NUM_VARS * nnz * nnx;
 	gridSize = (n + blockSize - 1) / blockSize;
 
-	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n, preCalcINDT_do_dir_x_z_add,
-                                                       preCalcINDF1_do_dir_x_z_add,
-                                                       preCalcINDF2_do_dir_x_z_add);
+	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
   cudaDeviceSynchronize();
 }
 
@@ -556,9 +552,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   n = NUM_VARS * nnz * nnx;
   gridSize = (n + blockSize - 1) / blockSize;;
 
-  do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n, preCalcINDT_do_dir_x_z_add,
-                                                              preCalcINDF1_do_dir_x_z_add,
-                                                              preCalcINDF2_do_dir_x_z_add);
+  do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
   cudaDeviceSynchronize();
 }
 
@@ -717,11 +711,6 @@ void initialize( int *argc , char ***argv ) {
   cudaMalloc(&cfd_dens_int_gpu, (nnz+1)*sizeof(double) );
   cudaMalloc(&cfd_dens_theta_int_gpu, (nnz+1)*sizeof(double) );
   cudaMalloc(&cfd_pressure_int_gpu, (nnz+1)*sizeof(double) );
-  cudaMalloc(&preCalcINDS_do_semi_step_add, NUM_VARS * nnz * nnx*sizeof(int));
-  cudaMalloc(&preCalcINDT_do_semi_step_add, NUM_VARS * nnz * nnx*sizeof(int));
-  cudaMalloc(&preCalcINDT_do_dir_x_z_add, NUM_VARS * nnz * nnx*sizeof(int));
-  cudaMalloc(&preCalcINDF1_do_dir_x_z_add, NUM_VARS * nnz * nnx*sizeof(int));
-  cudaMalloc(&preCalcINDF2_do_dir_x_z_add, NUM_VARS * nnz * nnx*sizeof(int));
 
   //Define the maximum stable time step based on an assumed maximum wind speed
   dt = dmin(dx,dz) / max_speed * cfl;
@@ -974,12 +963,6 @@ void finalize() {
   cudaFree( cfd_dens_int_gpu );
   cudaFree( cfd_dens_theta_int_gpu );
   cudaFree( cfd_pressure_int_gpu );
-
-  cudaFree( preCalcINDS_do_semi_step_add);
-  cudaFree( preCalcINDT_do_semi_step_add);
-  cudaFree( preCalcINDT_do_dir_x_z_add);
-  cudaFree( preCalcINDF1_do_dir_x_z_add);
-  cudaFree( preCalcINDF2_do_dir_x_z_add);
 }
 
 
@@ -1039,51 +1022,12 @@ void print(double *v, int n){
   printf("\n");
 }
 
-__global__ void gpu_pre_calc_index(int n, int nnx, int nnz, int NUM_VARS, int *preCalcINDS_do_semi_step_add,
-                                                                          int *preCalcINDT_do_semi_step_add,
-                                                                          int *preCalcINDT_do_dir_x_z_add,
-                                                                          int *preCalcINDF1_do_dir_x_z_add,
-                                                                          int *preCalcINDF2_do_dir_x_z_add){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-	if(id < n){
-
-    // Calculating
-    int ll= id /(nnz * nnx);
-    int k = (id / nnx) % nnz;
-    int i = id % nnx;
-
-    // Saving values in GPU.
-    preCalcINDS_do_semi_step_add[id] = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-    preCalcINDT_do_semi_step_add[id] = ll*nnz*nnx + k*nnx + i;
-    preCalcINDT_do_dir_x_z_add[id] = ll* nnz   * nnx    + k* nnx    + i  ;
-    preCalcINDF1_do_dir_x_z_add[id] = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-    preCalcINDF2_do_dir_x_z_add[id] = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
-	}
-}
-
-void preCalcIndex () {
-
-  int n = NUM_VARS * nnz * nnx;
-  int gridSize = (n + blockSize - 1) / blockSize;
-
-  gpu_pre_calc_index<<<gridSize, blockSize>>>(n, nnx, nnz, NUM_VARS, preCalcINDS_do_semi_step_add,
-                                                                     preCalcINDT_do_semi_step_add,
-                                                                     preCalcINDT_do_dir_x_z_add,
-                                                                     preCalcINDF1_do_dir_x_z_add,
-                                                                     preCalcINDF2_do_dir_x_z_add);
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////
 // THE MAIN PROGRAM STARTS HERE
 ///////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv) {
   
   initialize( &argc , &argv );
-  cudaDeviceSynchronize();
-
-  preCalcIndex();
   cudaDeviceSynchronize();
 
   //Initial reductions for mass, kinetic energy, and total energy
