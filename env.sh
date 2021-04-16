@@ -1,1 +1,1 @@
-module load cuda11.2/toolkit
+module load cuda10.1/toolkit/10.1.243

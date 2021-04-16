@@ -139,24 +139,20 @@ __global__ void do_dir_x_flux(double *state, double *flux, double *tend, double 
 
 		double vals[NUM_VARS], d_vals[NUM_VARS];
 
-    int ll = 0, inds;
-      		
-    // LOOP UNROLLING 4x: Directly integrating FOR in calculus.
-    inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    vals[ll] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
-    d_vals[ll] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-  
-    inds = (ll + 1) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    vals[ll + 1] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
-    d_vals[ll + 1] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-  
-    inds = (ll + 2) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    vals[ll + 2] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
-    d_vals[ll + 2] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-  
-    inds = (ll + 3) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    vals[ll + 3] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
-    d_vals[ll + 3] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+		for (int ll=0; ll<NUM_VARS; ll++) {
+      
+			double stencil[4];
+		
+			for (int s=0; s < cfd_size; s++) {
+				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
+				stencil[s] = state[inds];
+			}
+		
+			//Fourth-order-accurate interpolation of the state
+			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+			//First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+		}
 
 		double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
 		double u = vals[POS_UMOM] / r;
@@ -199,25 +195,18 @@ __global__ void do_dir_z_flux(double *state , double *flux, double *tend, double
     	int i = id % nnx;
 		//Use fourth-order interpolation from four cell averages to compute the value at the interface in question
 		
-		double d_vals[NUM_VARS], vals[NUM_VARS];
+		double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
 		
-    // LOOP UNROLLING 4x: Directly integrating FOR in calculus.
-    int ll = 0, inds;
-    inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
-		vals[ll] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
-		d_vals[ll] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
-
-    inds = (ll + 1)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
-		vals[ll + 1] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
-		d_vals[ll + 1] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
-
-    inds = (ll + 2)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
-		vals[ll + 2] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
-		d_vals[ll + 2] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
-
-    inds = (ll + 3)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
-		vals[ll + 3] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
-		d_vals[ll + 3] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
+		for (int ll=0; ll<NUM_VARS; ll++) {
+			for (int s=0; s<cfd_size; s++) {
+				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
+				stencil[s] = state[inds];
+			}
+			//Fourth-order-accurate interpolation of the state
+			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
+			//First-order-accurate interpolation of the third spatial derivative of the state
+			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
+		}
 
 		//Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
 		double r = vals[POS_DENS] + cfd_dens_int[k];
@@ -399,7 +388,7 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 }
 
 
@@ -458,7 +447,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -479,7 +468,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 }
 
 
@@ -539,7 +528,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   int gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -564,7 +553,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 }
 
 // CUDA kernel. 
@@ -616,7 +605,7 @@ void exchange_border_x( double *state ) {
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_x_1<<<gridSize, blockSize>>>(state, n);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
   ////////////////////////////////////////////////////
   
   if (config_spec == CONFIG_IN_TEST6) {
@@ -638,7 +627,7 @@ void exchange_border_x( double *state ) {
       gridSize = (n + blockSize - 1)/blockSize;
 
       exchange_border_x_2<<<gridSize, blockSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
-      //cudaDeviceSynchronize();
+      cudaDeviceSynchronize();
     }
   }
 }
@@ -687,7 +676,7 @@ void exchange_border_z( double *state ) {
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_z_1<<<gridSize, blockSize>>>(state, n, mnt_width);
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 }
 
 
@@ -1039,14 +1028,14 @@ void print(double *v, int n){
 int main(int argc, char **argv) {
   
   initialize( &argc , &argv );
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 
   //Initial reductions for mass, kinetic energy, and total energy
   do_results(mass0,te0);
 
   //Copying data to GPU
   copy_to_gpu();
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -1057,7 +1046,7 @@ int main(int argc, char **argv) {
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
     do_timestep(state_gpu,state_tmp_gpu,flux_gpu,tend_gpu,dt);
-    //cudaDeviceSynchronize();
+    cudaDeviceSynchronize();
     //Update the elapsed time and output counter
     etime = etime + dt;
     output_counter = output_counter + dt;
@@ -1077,7 +1066,7 @@ int main(int argc, char **argv) {
   }
 
   copy_to_cpu();
-  //cudaDeviceSynchronize();
+  cudaDeviceSynchronize();
 
   //Final reductions for mass, kinetic energy, and total energy
   do_results(mass,te);
