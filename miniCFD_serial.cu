@@ -137,20 +137,24 @@ __global__ void do_dir_x_flux(double *state, double *flux, double *tend, double 
 
 		double vals[NUM_VARS], d_vals[NUM_VARS];
 
-		for (int ll=0; ll<NUM_VARS; ll++) {
-      
-			double stencil[4];
-		
-			for (int s=0; s < cfd_size; s++) {
-				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-				stencil[s] = state[inds];
-			}
-		
-			//Fourth-order-accurate interpolation of the state
-			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-			//First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-		}
+    int ll = 0, inds;
+      		
+    // LOOP UNROLLING 4x: Directly integrating FOR in calculus.
+    inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+    vals[ll] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
+    d_vals[ll] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+  
+    inds = (ll + 1) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+    vals[ll + 1] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
+    d_vals[ll + 1] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+  
+    inds = (ll + 2) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+    vals[ll + 2] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
+    d_vals[ll + 2] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
+  
+    inds = (ll + 3) *(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
+    vals[ll + 3] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state
+    d_vals[ll + 3] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
 
 		double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
 		double u = vals[POS_UMOM] / r;
@@ -195,18 +199,25 @@ __global__ void do_dir_z_flux(double *state , double *flux, double *tend, double
     	int i = id % nnx;
 		//Use fourth-order interpolation from four cell averages to compute the value at the interface in question
 		
-		double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
+		double d_vals[NUM_VARS], vals[NUM_VARS];
 		
-		for (int ll=0; ll<NUM_VARS; ll++) {
-			for (int s=0; s<cfd_size; s++) {
-				int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-				stencil[s] = state[inds];
-			}
-			//Fourth-order-accurate interpolation of the state
-			vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-			//First-order-accurate interpolation of the third spatial derivative of the state
-			d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-		}
+    // LOOP UNROLLING 4x: Directly integrating FOR in calculus.
+    int ll = 0, inds;
+    inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
+		vals[ll] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
+		d_vals[ll] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
+
+    inds = (ll + 1)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
+		vals[ll + 1] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
+		d_vals[ll + 1] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
+
+    inds = (ll + 2)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
+		vals[ll + 2] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
+		d_vals[ll + 2] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
+
+    inds = (ll + 3)*(nnz+2*hs)*(nnx+2*hs) + (k)*(nnx+2*hs) + i+hs;	
+		vals[ll + 3] = -state[inds]/12 + 7*state[inds + 1]/12 + 7*state[inds + 2]/12 - state[inds + 3]/12; //Fourth-order-accurate interpolation of the state			
+		d_vals[ll + 3] = -state[inds] + 3*state[inds + 1] - 3*state[inds + 2] + state[inds + 3];           //First-order-accurate interpolation of the third spatial derivative of the state
 
 		//Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
 		double r = vals[POS_DENS] + cfd_dens_int[k];
