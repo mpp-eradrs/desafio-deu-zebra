@@ -110,7 +110,7 @@ void   exchange_border_x    ( double *state );
 void   exchange_border_z    ( double *state );
 void   do_results           ( double &mass , double &te );
 
-const int blockSize = 1024;
+const int blockSize = 512;
 
 __global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, double dt){
   
