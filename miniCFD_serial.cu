@@ -112,9 +112,10 @@ void   do_results           ( double &mass , double &te );
 
 const int blockSize = 1024;
 
-__global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, int dt){
-	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
+__global__ void do_semi_step_add(double *state_out, double *state_init, double *tend, int n, double dt){
+  
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		  int ll= id /(nnz * nnx);
@@ -128,7 +129,8 @@ __global__ void do_semi_step_add(double *state_out, double *state_init, double *
 
 __global__ void do_dir_x_flux(double *state, double *flux, double *tend, double *cfd_dens_cell, double *cfd_dens_theta_cell, int n, double v_coef){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		
@@ -172,7 +174,8 @@ __global__ void do_dir_x_flux(double *state, double *flux, double *tend, double 
 
 __global__ void do_dir_x_add(double *tend, double *flux, int n){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		int ll= id /(nnz * nnx);
@@ -187,11 +190,8 @@ __global__ void do_dir_x_add(double *tend, double *flux, int n){
 
 __global__ void do_dir_z_flux(double *state , double *flux, double *tend, double *cfd_dens_int, double *cfd_dens_theta_int, double *cfd_pressure_int, int n, double v_coef){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-  if(id == 0){
-    //printf("kernel_z_flux\n");
-  }
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 	
 	if(id < n){
 	
@@ -242,11 +242,8 @@ __global__ void do_dir_z_flux(double *state , double *flux, double *tend, double
 
 __global__ void do_dir_z_add(double *state, double *tend, double *flux, int n){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
-
-  if(id == 0){
-    //printf("kernel_z_add\n");
-  }
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		int ll= id /(nnz * nnx);
@@ -266,7 +263,8 @@ __global__ void do_dir_z_add(double *state, double *tend, double *flux, int n){
 
 __global__ void exchange_border_x_1(double *state, int n){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		int ll = id / nnz;
@@ -299,7 +297,8 @@ __global__ void exchange_border_x_2(double *state, double *cfd_dens_cell, double
 
 __global__ void exchange_border_z_1(double *state, int n, int mnt_width){
 	
-	int id = blockIdx.x*blockDim.x+threadIdx.x;
+  
+  int id = blockIdx.x*blockDim.x+threadIdx.x;
 
 	if(id < n){
 		int ll = id / (nnx+2*hs);
@@ -400,7 +399,7 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 }
 
 
@@ -410,8 +409,9 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
 //Then, compute the tendencies using those fluxes
 void do_dir_x( double *state , double *flux , double *tend ) {
 
+  
   //Compute the hyperviscosity coeficient
-  const double v_coef = -hv * dx / (16*dt);;
+  const double v_coef = -hv * dx / (16*dt);
   /////////////////////////////////////////////////
   // TODO: THREAD ME
   /////////////////////////////////////////////////
@@ -458,7 +458,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -479,7 +479,7 @@ void do_dir_x( double *state , double *flux , double *tend ) {
 	gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 }
 
 
@@ -539,7 +539,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   int gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 
   /////////////////////////////////////////////////
   // TODO: THREAD ME
@@ -564,7 +564,7 @@ void do_dir_z( double *state , double *flux , double *tend ) {
   gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 }
 
 // CUDA kernel. 
@@ -616,7 +616,7 @@ void exchange_border_x( double *state ) {
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_x_1<<<gridSize, blockSize>>>(state, n);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
   ////////////////////////////////////////////////////
   
   if (config_spec == CONFIG_IN_TEST6) {
@@ -638,7 +638,7 @@ void exchange_border_x( double *state ) {
       gridSize = (n + blockSize - 1)/blockSize;
 
       exchange_border_x_2<<<gridSize, blockSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
-      cudaDeviceSynchronize();
+      //cudaDeviceSynchronize();
     }
   }
 }
@@ -687,7 +687,7 @@ void exchange_border_z( double *state ) {
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_z_1<<<gridSize, blockSize>>>(state, n, mnt_width);
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 }
 
 
@@ -1039,14 +1039,14 @@ void print(double *v, int n){
 int main(int argc, char **argv) {
   
   initialize( &argc , &argv );
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 
   //Initial reductions for mass, kinetic energy, and total energy
   do_results(mass0,te0);
 
   //Copying data to GPU
   copy_to_gpu();
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -1057,7 +1057,7 @@ int main(int argc, char **argv) {
     if (etime + dt > sim_time) { dt = sim_time - etime; }
     //Perform a single time step
     do_timestep(state_gpu,state_tmp_gpu,flux_gpu,tend_gpu,dt);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
     //Update the elapsed time and output counter
     etime = etime + dt;
     output_counter = output_counter + dt;
@@ -1077,7 +1077,7 @@ int main(int argc, char **argv) {
   }
 
   copy_to_cpu();
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
 
   //Final reductions for mass, kinetic energy, and total energy
   do_results(mass,te);
