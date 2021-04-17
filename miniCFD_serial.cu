@@ -9,6 +9,18 @@
 #include <ctime>
 #include <iostream>
 
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+
+#define DEBUG
+
 const double pi        = 3.14159265358979323846264338327;   //Pi
 const double grav      = 9.8;                               //Gravitational acceleration (m / s^2)
 const double cp        = 1004.;                             //Specific heat of dry air at constant pressure
@@ -370,25 +382,15 @@ void do_semi_step( double *state_init , double *state_forcing , double *state_ou
     do_dir_z(state_forcing,flux,tend);
   }
 
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Apply the tendencies to the fluid state
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int inds = (k+hs)*(nnx+2*hs) + ll*(nnz+2*hs)*(nnx+2*hs) + i+hs;
-//     int indt = ll*nnz*nnx + k*nnx + i;
-//     state_out[inds] = state_init[inds] + dt * tend[indt];
-//   }
-
 	int n = NUM_VARS * nnz * nnx;
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_semi_step_add<<<gridSize, blockSize>>>(state_out, state_init, tend, n, dt);
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 }
 
 
@@ -401,74 +403,26 @@ void do_dir_x( double *state , double *flux , double *tend ) {
   
   //Compute the hyperviscosity coeficient
   const double v_coef = -hv * dx / (16*dt);
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Compute fluxes in the x-direction for each cell
-//   #pragma omp parallel for
-//   for(int a = 0; a < (nnz) * (nnx + 1); a++){
-
-//     int k = a / (nnx + 1);
-//     int i = a % (nnx + 1);
-//     //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-    
-//     double vals[NUM_VARS], d_vals[NUM_VARS];
-    
-//     for (int ll=0; ll<NUM_VARS; ll++) {
-      
-//       double stencil[4];
-      
-//       for (int s=0; s < cfd_size; s++) {
-//         int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+s;
-//         stencil[s] = state[inds];
-//       }
-
-//       //Fourth-order-accurate interpolation of the state
-//       vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-//       //First-order-accurate interpolation of the third spatial derivative of the state (for artificial viscosity)
-//       d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-//     }
-
-//     //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-//     double r = vals[POS_DENS] + cfd_dens_cell[k+hs];
-//     double u = vals[POS_UMOM] / r;
-//     double w = vals[POS_WMOM] / r;
-//     double t = ( cfd_dens_theta_cell[k+hs] + vals[POS_RHOT] ) / r;
-//     double p = pow((r*t),gamm)*C0;
-
-//     //Compute the flux vector
-//     flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u     - v_coef*d_vals[POS_DENS];
-//     flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*u+p - v_coef*d_vals[POS_UMOM];
-//     flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*w   - v_coef*d_vals[POS_WMOM];
-//     flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*u*t   - v_coef*d_vals[POS_RHOT];
-//   }
 
 	int n = (nnz) * (nnx + 1);
 	int gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n, v_coef);
-  //cudaDeviceSynchronize();
-
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Use the fluxes to compute tendencies for each cell
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-//     int indf1 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i  ;
-//     int indf2 = ll*(nnz+1)*(nnx+1) + k*(nnx+1) + i+1;
-//     tend[indt] = -( flux[indf2] - flux[indf1] ) / dx;
-//   }
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 
 	n = NUM_VARS * nnz * nnx;
 	gridSize = (n + blockSize - 1) / blockSize;
 
 	do_dir_x_add<<<gridSize, blockSize>>>(tend, flux, n);
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 }
 
 
@@ -480,80 +434,26 @@ void do_dir_z( double *state , double *flux , double *tend ) {
 
   //Compute the viscosity coeficient
   const double v_coef = -hv * dz / (16 * dt);
-  
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Compute fluxes in the x-direction for each cell
-//   #pragma omp parallel for
-//   for(int a = 0; a < (nnz + 1) * nnx; a++){
-
-//     int k = a / nnx;
-//     int i = a % nnx;
-//     //Use fourth-order interpolation from four cell averages to compute the value at the interface in question
-    
-//     double stencil[4], d_vals[NUM_VARS], vals[NUM_VARS];
-    
-//     for (int ll=0; ll<NUM_VARS; ll++) {
-//       for (int s=0; s<cfd_size; s++) {
-//         int inds = ll*(nnz+2*hs)*(nnx+2*hs) + (k+s)*(nnx+2*hs) + i+hs;
-//         stencil[s] = state[inds];
-//       }
-//       //Fourth-order-accurate interpolation of the state
-//       vals[ll] = -stencil[0]/12 + 7*stencil[1]/12 + 7*stencil[2]/12 - stencil[3]/12;
-//       //First-order-accurate interpolation of the third spatial derivative of the state
-//       d_vals[ll] = -stencil[0] + 3*stencil[1] - 3*stencil[2] + stencil[3];
-//     }
-
-//     //Compute density, u-wind, w-wind, potential temperature, and pressure (r,u,w,t,p respectively)
-//     double r = vals[POS_DENS] + cfd_dens_int[k];
-//     double u = vals[POS_UMOM] / r;
-//     double w = vals[POS_WMOM] / r;
-//     double t = ( vals[POS_RHOT] + cfd_dens_theta_int[k] ) / r;
-//     double p = C0*pow((r*t),gamm) - cfd_pressure_int[k];
-//     //Enforce vertical boundary condition and exact mass conservation
-//     if (k == 0 || k == nnz) {
-//       w                = 0;
-//       d_vals[POS_DENS] = 0;
-//     }
-
-//     //Compute the flux vector with viscosity
-//     flux[POS_DENS*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w     - v_coef*d_vals[POS_DENS];
-//     flux[POS_UMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*u   - v_coef*d_vals[POS_UMOM];
-//     flux[POS_WMOM*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*w+p - v_coef*d_vals[POS_WMOM];
-//     flux[POS_RHOT*(nnz+1)*(nnx+1) + k*(nnx+1) + i] = r*w*t   - v_coef*d_vals[POS_RHOT];
-//   }
 
   int n = (nnz + 1) * nnx;
   int gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_flux<<<gridSize, blockSize>>>(state, flux, tend, cfd_dens_int_gpu, cfd_dens_theta_int_gpu, cfd_pressure_int_gpu, n, v_coef);
-  //cudaDeviceSynchronize();
-
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-  //Use the fluxes to compute tendencies for each cell
-//   #pragma omp parallel for
-//   for (int a = 0; a < NUM_VARS * nnz * nnx; a++) {
-//     int ll= a /(nnz * nnx);
-//     int k = (a / nnx) % nnz;
-//     int i = a % nnx;
-//     int indt  = ll* nnz   * nnx    + k* nnx    + i  ;
-//     int indf1 = ll*(nnz+1)*(nnx+1) + (k  )*(nnx+1) + i;
-//     int indf2 = ll*(nnz+1)*(nnx+1) + (k+1)*(nnx+1) + i;
-//     tend[indt] = -( flux[indf2] - flux[indf1] ) / dz;
-//     if (ll == POS_WMOM) {
-//       int inds = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i+hs;
-//       tend[indt] = tend[indt] - state[inds]*grav;
-//     }
-//   }
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 
   n = NUM_VARS * nnz * nnx;
   gridSize = (n + blockSize - 1) / blockSize;;
 
   do_dir_z_add<<<gridSize, blockSize>>>(state, tend, flux, n);
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 }
 
 // CUDA kernel. 
@@ -578,56 +478,29 @@ __global__ void copyStatesX(double *d, int n, int nnx_, int nnz_)
 
 //Set this MPI task's halo values in the x-direction. This routine will require MPI
 void exchange_border_x( double *state ) {
-  
-  ////////////////////////////////////////////////////////////////////////
-  // TODO: EXCHANGE HALO VALUES WITH NEIGHBORING MPI TASKS
-  // (1) give    state(1:hs,1:nnz,1:NUM_VARS)       to   my left  neighbor
-  // (2) receive state(1-hs:0,1:nnz,1:NUM_VARS)     from my left  neighbor
-  // (3) give    state(nnx-hs+1:nnx,1:nnz,1:NUM_VARS) to   my right neighbor
-  // (4) receive state(nnx+1:nnx+hs,1:nnz,1:NUM_VARS) from my right neighbor
-  ////////////////////////////////////////////////////////////////////////
-
-  //////////////////////////////////////////////////////
-  // DELETE THE SERIAL CODE BELOW AND REPLACE WITH MPI
-  //////////////////////////////////////////////////////
-//   for (ll=0; ll<NUM_VARS; ll++) {
-//     #pragma omp parallel for
-//     for (k=0; k<nnz; k++) {
-//       int pos = ll*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs);
-//       state[pos + 0      ] = state[pos + nnx+hs-2];
-//       state[pos + 1      ] = state[pos + nnx+hs-1];
-//       state[pos + nnx+hs  ] = state[pos + hs     ];
-//       state[pos + nnx+hs+1] = state[pos + hs+1   ];
-//     }
-//   }
 
 	int n = NUM_VARS * nnz;
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_x_1<<<gridSize, blockSize>>>(state, n);
-  //cudaDeviceSynchronize();
-  ////////////////////////////////////////////////////
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
   
   if (config_spec == CONFIG_IN_TEST6) {
     if (myrank == 0) {
-    //   #pragma omp parallel for
-    //   for (k=0; k<nnz; k++) {
-    //     for (i=0; i<hs; i++) {
-    //       z = (k_beg + k+0.5)*dz;
-    //       if (fabs(z-3*zlen/4) <= zlen/16) {
-    //         ind_r = POS_DENS*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         ind_u = POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         ind_t = POS_RHOT*(nnz+2*hs)*(nnx+2*hs) + (k+hs)*(nnx+2*hs) + i;
-    //         state[ind_u] = (state[ind_r]+cfd_dens_cell[k+hs]) * 50.;
-    //         state[ind_t] = (state[ind_r]+cfd_dens_cell[k+hs]) * 298. - cfd_dens_theta_cell[k+hs];
-    //       }
-    //     }
-    //   }
+
       n = nnz * hs;
       gridSize = (n + blockSize - 1)/blockSize;
 
       exchange_border_x_2<<<gridSize, blockSize>>>(state, cfd_dens_cell_gpu, cfd_dens_theta_cell_gpu, n);
-      //cudaDeviceSynchronize();
+      
+      #ifdef DEBUG
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+      #endif
     }
   }
 }
@@ -638,45 +511,16 @@ void exchange_border_x( double *state ) {
 void exchange_border_z( double *state ) {
 
   const double mnt_width = xlen/8;
-  /////////////////////////////////////////////////
-  // TODO: THREAD ME
-  /////////////////////////////////////////////////
-//   #pragma omp parallel for
-//   for (int ll=0; ll<NUM_VARS; ll++) {
-//     for (int i=0; i<nnx+2*hs; i++) {
-      
-//       int pos = ll*(nnz+2*hs)*(nnx+2*hs);
-      
-//       if (ll == POS_WMOM) {
-//         state[pos + (0      )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (1      )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (nnz+hs  )*(nnx+2*hs) + i] = 0.;
-//         state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = 0.;
-//         //Impose the vertical momentum effects of an artificial cos^2 mountain at the lower boundary
-//         if (config_spec == CONFIG_IN_TEST3) {
-//           double x = (i_beg+i-hs+0.5)*dx;
-//           if ( fabs(x-xlen/4) < mnt_width ) {
-//             double xloc = (x-(xlen/4)) / mnt_width;
-//             //Compute the derivative of the fake mountain
-//             double mnt_deriv = -pi*cos(pi*xloc/2)*sin(pi*xloc/2)*10/dx;
-//             //w = (dz/dx)*u
-//             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (0)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-//             state[POS_WMOM*(nnz+2*hs)*(nnx+2*hs) + (1)*(nnx+2*hs) + i] = mnt_deriv*state[POS_UMOM*(nnz+2*hs)*(nnx+2*hs) + hs*(nnx+2*hs) + i];
-//           }
-//         }
-//       } else {
-//         state[pos + (0      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-//         state[pos + (1      )*(nnx+2*hs) + i] = state[pos + (hs     )*(nnx+2*hs) + i];
-//         state[pos + (nnz+hs  )*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-//         state[pos + (nnz+hs+1)*(nnx+2*hs) + i] = state[pos + (nnz+hs-1)*(nnx+2*hs) + i];
-//       }
-//     }
-//   }
+
 	int n = NUM_VARS * (nnx+2*hs);
 	int gridSize = (n + blockSize - 1)/blockSize;
 
 	exchange_border_z_1<<<gridSize, blockSize>>>(state, n, mnt_width);
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 }
 
 
@@ -1035,7 +879,11 @@ int main(int argc, char **argv) {
 
   //Copying data to GPU
   copy_to_gpu();
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 
   ////////////////////////////////////////////////////
   // MAIN TIME STEP LOOP
@@ -1066,7 +914,11 @@ int main(int argc, char **argv) {
   }
 
   copy_to_cpu();
-  //cudaDeviceSynchronize();
+  
+  #ifdef DEBUG
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+  #endif
 
   //Final reductions for mass, kinetic energy, and total energy
   do_results(mass,te);
